@@ -1,27 +1,31 @@
-import { GoogleGenAI } from '@google/genai'
-import { NextRequest, NextResponse } from 'next/server'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
+import { streamObject } from 'ai'
+import { NextRequest } from 'next/server'
 import { fetchRelevantDocs } from '@/lib/fetch-docs'
 import { logError } from '@/lib/supabase-admin'
+import { AnalysisSchema } from '@/lib/schema'
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! })
+const google = createGoogleGenerativeAI({
+  apiKey: process.env.GEMINI_API_KEY,
+})
 
 export async function POST(req: NextRequest) {
   const { error, mode } = await req.json()
   if (!error?.trim()) {
-    return NextResponse.json({ error: 'No error provided' }, { status: 400 })
+    return Response.json({ error: 'No error provided' }, { status: 400 })
   }
 
   const isKid = mode === 'kid'
 
-  // Fetch relevant Supabase docs in parallel while we build the prompt.
-  // Content is cached for 1 hour — zero latency on repeated error types.
+  // Fetch relevant Supabase docs in parallel with prompt assembly.
+  // Content is cached for 1 hour — zero added latency on repeated error types.
   const docsContext = await fetchRelevantDocs(error).catch(() => '')
 
   const docsBlock = docsContext
     ? `\n\nThe following is the ACTUAL content of the relevant Supabase documentation pages. Ground your entire response — especially fixSteps and doc excerpts — in this content. Do not invent information not present here:\n\n${docsContext}\n`
     : ''
 
-  const systemPrompt = `You are a Supabase documentation expert. Analyze the error and return ONLY valid JSON — no markdown, no backticks, no commentary outside the JSON.${docsBlock}
+  const systemPrompt = `You are a Supabase documentation expert. Analyze the error and respond with structured JSON.${docsBlock}
 
 Return this exact shape:
 {
@@ -53,51 +57,45 @@ Rules:
 - docs: 3-5 pages ordered by relevance. Only reference pages that appear in the documentation context above, or well-known pages you are certain exist at supabase.com/docs.
 - excerpt: paraphrase actual content from the docs above — do not invent content.
 - relevance: exactly "high" | "mid" | "low"
-- section: exactly "Auth" | "Database" | "Storage" | "Realtime" | "Edge Functions" | "CLI" | "API"
-- Return only the JSON object.`
+- section: exactly "Auth" | "Database" | "Storage" | "Realtime" | "Edge Functions" | "CLI" | "API"`
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: `Error:\n\n${error}`,
-      config: {
-        systemInstruction: systemPrompt,
-        // JSON mode guarantees structurally valid output — no backtick fences to strip.
-        // Larger token budget needed because injected docs context makes responses longer.
-        responseMimeType: 'application/json',
-        maxOutputTokens: 4096,
+    const stream = streamObject({
+      model: google('gemini-2.5-flash'),
+      schema: AnalysisSchema,
+      system: systemPrompt,
+      prompt: `Error:\n\n${error}`,
+      onFinish: async ({ object }) => {
+        // Fire-and-forget analytics log — never blocks the stream
+        if (object?.errorCode) {
+          logError({
+            errorCode: object.errorCode,
+            rawError: error,
+            mode,
+          }).catch(() => {})
+        }
       },
     })
 
-    const raw = response.text ?? ''
-    const parsed = JSON.parse(raw)
-
-    // Fire-and-forget analytics log — don't block the response
-    logError({
-      errorCode: parsed.errorCode ?? 'UNKNOWN',
-      rawError: error,
-      mode,
-    }).catch(() => {})
-
-    return NextResponse.json(parsed)
+    return stream.toTextStreamResponse()
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
 
     if (message.includes('429') || message.includes('RESOURCE_EXHAUSTED')) {
-      return NextResponse.json(
+      return Response.json(
         { error: 'Rate limit reached. Please wait a moment and try again.' },
         { status: 429 }
       )
     }
     if (message.includes('API_KEY') || message.includes('API key')) {
-      return NextResponse.json(
+      return Response.json(
         { error: 'Invalid API key. Add your GEMINI_API_KEY to .env.local.' },
         { status: 401 }
       )
     }
 
     console.error('[analyze]', err)
-    return NextResponse.json(
+    return Response.json(
       { error: 'Failed to analyze the error. Please try again.' },
       { status: 500 }
     )

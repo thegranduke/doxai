@@ -9,8 +9,9 @@
  */
 import Link from 'next/link'
 import { supabaseAdmin, analyticsEnabled } from '@/lib/supabase-admin'
+import { AutoRefresh } from './auto-refresh'
 
-export const revalidate = 60
+export const revalidate = 0
 
 // ── Data fetching ─────────────────────────────────────────────────────────────
 
@@ -82,6 +83,8 @@ export default async function AnalyticsPage() {
 
   return (
     <main className="min-h-screen bg-background px-4 py-16 max-w-3xl mx-auto">
+      {/* Re-fetches server data every 8 seconds without a full page reload */}
+      <AutoRefresh intervalMs={8000} />
 
       {/* Header */}
       <div className="flex items-center justify-between mb-10">

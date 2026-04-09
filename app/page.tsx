@@ -1,5 +1,6 @@
 'use client'
 
+import { experimental_useObject as useObject } from '@ai-sdk/react'
 import { useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
@@ -7,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { AnalysisSchema, type DocLink } from '@/lib/schema'
 
 function trackDocClick(params: {
   docUrl: string
@@ -15,7 +17,6 @@ function trackDocClick(params: {
   errorCode?: string
   eventType: 'expand' | 'visit'
 }) {
-  // Fire-and-forget — don't await, don't block UX
   fetch('/api/track-doc', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -32,32 +33,13 @@ const EXAMPLES = {
 }
 
 type Mode = 'developer' | 'kid'
-type Relevance = 'high' | 'mid' | 'low'
 
-interface DocLink {
-  title: string
-  url: string
-  whyRelevant: string
-  tldr: string
-  excerpt: string
-  relevance: Relevance
-  section: string
-}
-
-interface Result {
-  errorCode: string
-  likelyCause: string
-  fixSteps: string[]
-  docs: DocLink[]
-}
-
-const relevanceBar: Record<Relevance, string> = {
+const relevanceBar: Record<string, string> = {
   high: 'bg-[#3ECF8E]',
   mid: 'bg-zinc-400',
   low: 'bg-zinc-600',
 }
 
-// ── Chevron icon ─────────────────────────────────────────────────────────────
 function Chevron({ open }: { open: boolean }) {
   return (
     <svg
@@ -74,14 +56,13 @@ function Chevron({ open }: { open: boolean }) {
   )
 }
 
-// ── Expandable doc card ───────────────────────────────────────────────────────
-function DocCard({ doc, errorCode }: { doc: DocLink; errorCode?: string }) {
+function DocCard({ doc, errorCode }: { doc: Partial<DocLink>; errorCode?: string }) {
   const [open, setOpen] = useState(false)
 
   function handleToggle() {
     const next = !open
     setOpen(next)
-    if (next) {
+    if (next && doc.url && doc.title) {
       trackDocClick({
         docUrl: doc.url,
         docTitle: doc.title,
@@ -94,9 +75,7 @@ function DocCard({ doc, errorCode }: { doc: DocLink; errorCode?: string }) {
 
   return (
     <div className={`rounded-lg border bg-card transition-colors ${open ? 'border-[#3ECF8E]/60' : 'border-border'}`}>
-      {/* Header row — click to expand.
-          Must be a div, not a button, because TooltipTrigger renders a <button>
-          and HTML disallows button-inside-button. */}
+      {/* Must be a div — TooltipTrigger renders a <button>, so nesting a <button> here is invalid HTML */}
       <div
         role="button"
         tabIndex={0}
@@ -104,26 +83,27 @@ function DocCard({ doc, errorCode }: { doc: DocLink; errorCode?: string }) {
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle() } }}
         className="w-full flex items-start gap-3 px-4 py-3.5 text-left cursor-pointer group"
       >
-        {/* Relevance bar */}
-        <div className={`w-0.5 self-stretch rounded-full shrink-0 mt-0.5 ${relevanceBar[doc.relevance] ?? 'bg-zinc-400'}`} />
+        <div className={`w-0.5 self-stretch rounded-full shrink-0 mt-0.5 ${relevanceBar[doc.relevance ?? ''] ?? 'bg-zinc-400'}`} />
 
         <div className="flex-1 min-w-0">
-          {/* Title with tooltip */}
           <Tooltip>
             <TooltipTrigger>
-              <span className="font-mono text-[13px] font-medium text-foreground group-hover:text-[#3ECF8E] transition-colors">
+              <span className="font-mono text-[13px] font-medium text-foreground group-hover:text-[#3ECF8E] transition-colors break-words">
                 {doc.title}
               </span>
             </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-[280px] font-mono text-[11px] leading-relaxed">
-              {doc.tldr}
-            </TooltipContent>
+            {doc.whyRelevant && (
+              <TooltipContent side="top" className="max-w-[300px] font-mono text-[11px] leading-relaxed">
+                {doc.whyRelevant}
+              </TooltipContent>
+            )}
           </Tooltip>
 
-          {/* Why relevant */}
-          <p className="font-mono text-[11px] text-muted-foreground mt-1 leading-relaxed">
-            {doc.whyRelevant}
-          </p>
+          {doc.whyRelevant && (
+            <p className="font-mono text-[11px] text-muted-foreground mt-1 leading-relaxed break-words">
+              {doc.whyRelevant}
+            </p>
+          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0 self-start mt-0.5">
@@ -136,36 +116,41 @@ function DocCard({ doc, errorCode }: { doc: DocLink; errorCode?: string }) {
         </div>
       </div>
 
-      {/* Expanded content */}
       {open && (
         <div className="px-4 pb-4 animate-in fade-in slide-in-from-top-1 duration-150">
           <div className="ml-3.5 border-t border-border pt-3">
-            <p className={`leading-relaxed text-foreground/80 ${doc.tldr ? 'font-mono text-[12px]' : ''}`}>
-              {doc.excerpt}
-            </p>
-            <a
-              href={doc.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={e => {
-                e.stopPropagation()
-                trackDocClick({
-                  docUrl: doc.url,
-                  docTitle: doc.title,
-                  docSection: doc.section,
-                  errorCode,
-                  eventType: 'visit',
-                })
-              }}
-              className="inline-flex items-center gap-1.5 mt-3 font-mono text-[11px] text-[#3ECF8E] hover:underline underline-offset-2"
-            >
-              Open in Supabase docs
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                <polyline points="15 3 21 3 21 9" />
-                <line x1="10" y1="14" x2="21" y2="3" />
-              </svg>
-            </a>
+            {doc.excerpt && (
+              <p className="font-mono text-[12px] leading-relaxed text-foreground/80 break-words">
+                {doc.excerpt}
+              </p>
+            )}
+            {doc.url && (
+              <a
+                href={doc.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={e => {
+                  e.stopPropagation()
+                  if (doc.url && doc.title) {
+                    trackDocClick({
+                      docUrl: doc.url,
+                      docTitle: doc.title,
+                      docSection: doc.section,
+                      errorCode,
+                      eventType: 'visit',
+                    })
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 mt-3 font-mono text-[11px] text-[#3ECF8E] hover:underline underline-offset-2"
+              >
+                Open in Supabase docs
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+              </a>
+            )}
           </div>
         </div>
       )}
@@ -173,49 +158,35 @@ function DocCard({ doc, errorCode }: { doc: DocLink; errorCode?: string }) {
   )
 }
 
-// ── Page ─────────────────────────────────────────────────────────────────────
 export default function Home() {
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<Mode>('developer')
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<Result | null>(null)
-  const [apiError, setApiError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
-  async function analyze() {
-    if (!input.trim() || loading) return
-    setLoading(true)
-    setResult(null)
-    setApiError(null)
-    try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ error: input, mode }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setApiError(data.error ?? 'Something went wrong. Please try again.')
-      } else {
-        setResult(data)
-      }
-    } catch {
-      setApiError('Network error. Please check your connection and try again.')
-    }
-    setLoading(false)
+  const { object, submit, isLoading, error: streamError, stop } = useObject({
+    api: '/api/analyze',
+    schema: AnalysisSchema,
+  })
+
+  function analyze() {
+    if (!input.trim() || isLoading) return
+    submit({ error: input, mode })
   }
 
   async function copySteps() {
-    if (!result?.fixSteps?.length) return
+    const steps = object?.fixSteps
+    if (!steps?.length) return
     await navigator.clipboard.writeText(
-      result.fixSteps.map((s, i) => `${i + 1}. ${s}`).join('\n')
+      steps.map((s, i) => `${i + 1}. ${s ?? ''}`).join('\n')
     )
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
+  const hasResults = isLoading || !!object?.likelyCause
+
   return (
-    <main className="min-h-screen bg-background px-4 py-16 max-w-2xl mx-auto">
+    <main className="min-h-screen bg-background px-4 py-16 w-full max-w-3xl mx-auto">
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between mb-10">
@@ -238,7 +209,7 @@ export default function Home() {
         {Object.entries(EXAMPLES).map(([key, val]) => (
           <button
             key={key}
-            onClick={() => { setInput(val); setResult(null); setApiError(null) }}
+            onClick={() => setInput(val)}
             className="font-mono text-[11px] px-3 py-1 rounded-md border border-border text-muted-foreground hover:border-[#3ECF8E] hover:text-foreground transition-colors"
           >
             {key === 'pgconn' ? 'pg conn' : key}
@@ -272,122 +243,164 @@ export default function Home() {
             </button>
           ))}
         </div>
-        <Button
-          onClick={analyze}
-          disabled={loading || !input.trim()}
-          className="bg-[#3ECF8E] hover:bg-[#3ECF8E]/90 text-black font-mono text-xs font-medium"
-        >
-          {loading ? (
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-full border-2 border-black/30 border-t-black animate-spin" />
-              analyzing...
-            </span>
-          ) : (
-            'analyze error →'
+        <div className="flex items-center gap-2">
+          {isLoading && (
+            <button
+              onClick={stop}
+              className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              stop
+            </button>
           )}
-        </Button>
+          <Button
+            onClick={analyze}
+            disabled={isLoading || !input.trim()}
+            className="bg-[#3ECF8E] hover:bg-[#3ECF8E]/90 text-black font-mono text-xs font-medium"
+          >
+            {isLoading ? (
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded-full border-2 border-black/30 border-t-black animate-spin" />
+                analyzing...
+              </span>
+            ) : (
+              'analyze error →'
+            )}
+          </Button>
+        </div>
       </div>
 
-      {/* ── API error state ── */}
-      {apiError && (
+      {/* ── Stream error ── */}
+      {streamError && (
         <div className="animate-in fade-in duration-200 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 mb-6">
-          <p className="font-mono text-[12px] text-destructive">{apiError}</p>
+          <p className="font-mono text-[12px] text-destructive">
+            {streamError.message || 'Something went wrong. Please try again.'}
+          </p>
         </div>
       )}
 
-      {/* ── Results ── */}
-      {result && (
+      {/* ── Results — rendered progressively as each field streams in ── */}
+      {hasResults && (
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300 space-y-8">
 
-          {/* Error code badge */}
-          {result.errorCode && (
+          {/* Error code badge — appears as soon as the model names the error */}
+          {object?.errorCode && (
             <code className="text-[11px] px-2 py-0.5 rounded bg-destructive/10 text-destructive font-mono inline-block">
-              {result.errorCode}
+              {object.errorCode}
             </code>
           )}
 
           {/* ── Section 1: What happened ── */}
-          <section>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-3">
-              {mode === 'kid' ? 'the simple version' : 'what happened'}
-            </p>
-            <div className={`rounded-lg border p-4 bg-card ${mode === 'kid' ? 'border-[#3ECF8E]/60' : 'border-border'}`}>
-              <p className={`leading-relaxed text-foreground ${mode === 'kid' ? 'font-serif text-base italic' : 'font-mono text-[13px]'}`}>
-                {result.likelyCause}
+          {(object?.likelyCause || isLoading) && (
+            <section>
+              <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-3">
+                {mode === 'kid' ? 'the simple version' : 'what happened'}
               </p>
-            </div>
-          </section>
-
-          <Separator />
+              <div className={`rounded-lg border p-4 bg-card ${mode === 'kid' ? 'border-[#3ECF8E]/60' : 'border-border'}`}>
+                {object?.likelyCause ? (
+                  <p className={`leading-relaxed text-foreground ${mode === 'kid' ? 'font-serif text-base italic' : 'font-mono text-[13px]'}`}>
+                    {object.likelyCause}
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="h-3 bg-muted rounded animate-pulse w-3/4" />
+                    <div className="h-3 bg-muted rounded animate-pulse w-1/2" />
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           {/* ── Section 2: Relevant documentation ── */}
-          <section>
-            <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-3">
-              relevant documentation
-            </p>
-            <p className="font-mono text-[11px] text-muted-foreground mb-3">
-              Hover a title to preview — click to expand the relevant content.
-            </p>
-            <div className="flex flex-col gap-2">
-              {result.docs.map((doc, i) => (
-                <DocCard key={i} doc={doc} errorCode={result.errorCode} />
-              ))}
-            </div>
-          </section>
-
-          <Separator />
+          {(object?.docs?.some(d => d?.title) || isLoading) && (
+            <>
+              <Separator />
+              <section>
+                <p className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-3">
+                  relevant documentation
+                </p>
+                <p className="font-mono text-[11px] text-muted-foreground mb-3">
+                  Hover a title to preview — click to expand the relevant content.
+                </p>
+                <div className="flex flex-col gap-2">
+                  {object?.docs?.filter((d): d is NonNullable<typeof d> => Boolean(d?.title && d?.url)).map((doc, i) => (
+                    <DocCard key={i} doc={doc as Partial<DocLink>} errorCode={object?.errorCode} />
+                  ))}
+                  {/* Skeleton for upcoming docs while stream is in progress */}
+                  {isLoading && !object?.docs?.length && (
+                    <div className="rounded-lg border border-border bg-card px-4 py-3.5">
+                      <div className="h-3 bg-muted rounded animate-pulse w-1/3" />
+                    </div>
+                  )}
+                </div>
+              </section>
+            </>
+          )}
 
           {/* ── Section 3: How to fix ── */}
-          {result.fixSteps?.length > 0 && (
-            <section>
-              <div className="flex items-center justify-between mb-4">
-                <p className="font-mono text-[10px] uppercase tracking-widest text-[#3ECF8E]">
-                  how to fix
-                </p>
-                <button
-                  onClick={copySteps}
-                  className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
-                >
-                  {copied ? (
-                    <>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-[#3ECF8E]">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                      <span className="text-[#3ECF8E]">copied</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                      </svg>
-                      copy steps
-                    </>
+          {(object?.fixSteps?.some(s => Boolean(s)) || isLoading) && (
+            <>
+              <Separator />
+              <section>
+                <div className="flex items-center justify-between mb-4">
+                  <p className="font-mono text-[10px] uppercase tracking-widest text-[#3ECF8E]">
+                    how to fix
+                  </p>
+                  {object?.fixSteps?.some(s => Boolean(s)) && !isLoading && (
+                    <button
+                      onClick={copySteps}
+                      className="font-mono text-[11px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
+                    >
+                      {copied ? (
+                        <>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-[#3ECF8E]">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                          <span className="text-[#3ECF8E]">copied</span>
+                        </>
+                      ) : (
+                        <>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                          </svg>
+                          copy steps
+                        </>
+                      )}
+                    </button>
                   )}
-                </button>
-              </div>
+                </div>
 
-              {/* Clean numbered list — Supabase guide style */}
-              <ol className="rounded-lg border border-border bg-card overflow-hidden">
-                {result.fixSteps.map((step, i) => (
-                  <li
-                    key={i}
-                    className={`flex items-start gap-4 px-5 py-4 ${
-                      i < result.fixSteps.length - 1 ? 'border-b border-border' : ''
-                    }`}
-                  >
-                    <span className="font-mono text-[11px] text-muted-foreground shrink-0 mt-0.5 select-none tabular-nums">
-                      {String(i + 1).padStart(2, '0')}
-                    </span>
-                    <p className={`leading-relaxed text-foreground flex-1 ${
-                      mode === 'kid' ? 'font-serif text-sm italic' : 'font-mono text-[13px]'
-                    }`}>
-                      {step}
-                    </p>
-                  </li>
-                ))}
-              </ol>
-            </section>
+                <ol className="rounded-lg border border-border bg-card overflow-hidden">
+                  {object?.fixSteps?.filter((s): s is string => Boolean(s)).map((step, i) => (
+                    <li
+                      key={i}
+                      className={`flex items-start gap-4 px-5 py-4 animate-in fade-in duration-200 ${
+                        i < (object?.fixSteps?.filter((s): s is string => Boolean(s)).length ?? 0) - 1 || isLoading
+                          ? 'border-b border-border'
+                          : ''
+                      }`}
+                    >
+                      <span className="font-mono text-[11px] text-muted-foreground shrink-0 mt-0.5 select-none tabular-nums">
+                        {String(i + 1).padStart(2, '0')}
+                      </span>
+                      <p className={`leading-relaxed text-foreground flex-1 min-w-0 break-words ${
+                        mode === 'kid' ? 'font-serif text-sm italic' : 'font-mono text-[13px]'
+                      }`}>
+                        {step}
+                      </p>
+                    </li>
+                  ))}
+                  {isLoading && (
+                    <li className="flex items-start gap-4 px-5 py-4">
+                      <span className="font-mono text-[11px] text-muted-foreground shrink-0 mt-0.5 select-none">
+                        {String((object?.fixSteps?.filter(Boolean).length ?? 0) + 1).padStart(2, '0')}
+                      </span>
+                      <div className="h-3 bg-muted rounded animate-pulse w-2/3 mt-1" />
+                    </li>
+                  )}
+                </ol>
+              </section>
+            </>
           )}
 
         </div>
